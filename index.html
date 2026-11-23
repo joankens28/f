@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wengweng</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { position: relative; overflow: hidden; background: #000; color: #fff; }
+
+  h1 {
+    position: absolute; left: 0; right: 0; top: 47%;
+    margin: 0; transform: translateY(-50%); text-align: center;
+    font: 300 clamp(1.8rem, 6.5vw, 3.8rem) "Helvetica Neue", Helvetica, Arial, sans-serif;
+    letter-spacing: .02em;
+  }
+  .rest { visibility: hidden; }               /* keeps the text centered while typing */
+  .caret { display: inline-block; width: 0; position: relative; }
+  .caret::after {
+    content: ""; position: absolute; left: 3px; top: .12em; height: .85em;
+    border-left: 1px solid #fff; animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  canvas {
+    position: absolute; left: 0; bottom: 0;
+    width: 100%; height: 46vh;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+
+<h1 aria-label="congratulations, danie!"><span id="typed"></span><span class="caret"></span><span class="rest" id="rest">congratulations, danie!</span></h1>
+<canvas id="c" aria-hidden="true"></canvas>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const GROW = 7;                                   // seconds each lily takes to grow
+const STEMS  = ['#7ccf7a', '#5fbf8a', '#a3dc6b'];
+const LEAVES = [['#2f8f5b', '#62c98a'], ['#3a9a55', '#7fd87f'], ['#2c8577', '#5fcdb5']];  // [fill, edge]
+const BELLS  = [['#fff', '#bfe3ff'], ['#fff0f5', '#ffa8c5'], ['#fffbe0', '#ffd36e'], ['#f1ecff', '#b9a7ff']]; // [body, rim]
+const BELL = ['.XXX.', 'XXXXX', 'XXXXX', 'X.X.X'];  // pixel shape of one bell
+
+let W, H, GY, plants, endT, typing = false;
+const t0 = performance.now();
+
+const clamp = v => Math.max(0, Math.min(1, v));
+const px = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); };
+
+function rng(seed) {                              // seeded random, so the garden looks the same every time
+  return () => {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function setup() {
+  const P = innerWidth < 600 ? 3 : 4;             // size of one pixel on screen
+  const r = cv.getBoundingClientRect();
+  W = cv.width = Math.ceil(r.width / P);
+  H = cv.height = Math.ceil(r.height / P);
+  GY = H - 4;                                     // ground row
+
+  const rand = rng(7), pick = a => a[Math.floor(rand() * a.length)];
+  let x = 6, maxD = 0;
+  plants = [];
+  while (x < W - 6) {
+    const d = Math.abs(x - W / 2) / W * 2.4 + rand() * .6;   // start delay: grows outward from the center
+    maxD = Math.max(maxD, d);
+    plants.push({
+      x: Math.round(x),
+      h: Math.round((H - 8) * (.55 + rand() * .45)),
+      dir: rand() < .5 ? -1 : 1,
+      lean: .5 + rand() * .8,
+      d, stem: pick(STEMS), leaf: pick(LEAVES), bell: pick(BELLS)
+    });
+    x += 10 + rand() * 7;
+  }
+  plants.sort((a, b) => b.h - a.h);
+  endT = .4 + GROW + maxD;                        // moment every lily has finished growing
+}
+
+function drawPlant(p, t, time) {
+  const g = clamp(t / GROW);                      // growth progress 0..1
+
+  // wind: eases in once this lily is fully grown
+  const wind = .3 + .7 * (.6 * Math.sin(time + p.x * .05) + .4 * Math.sin(time * 2.3 + p.x * .12));
+  const A = clamp((t - GROW) / 2) * p.h * .1 * wind;
+
+  // leaves
+  const full = Math.round(p.h / 2), len = Math.round(full * clamp(g / .4));
+  for (const side of [-1, 1])
+    for (let i = 0; i < len; i++) {
+      const sw = i / p.h;
+      const cx = p.x + side * (1 + i * .4) + A * .5 * sw * sw;
+      const hw = Math.round(.5 + 1.6 * Math.sin(Math.PI * i / full));
+      for (let k = -hw; k <= hw; k++)
+        px(cx + k, GY - i, Math.abs(k) === hw ? p.leaf[1] : p.leaf[0]);
+    }
+
+  // stem
+  const sx = j => {
+    const s = j / p.h;
+    return p.x + Math.round(p.dir * p.lean * s * s * p.h * .25 + A * s * s);
+  };
+  const n = Math.round(p.h * clamp((g - .2) / .6));
+  for (let i = 0; i <= n; i++) px(sx(i), GY - i, p.stem);
+
+  // bells, from the middle of the stem to the tip
+  for (let i = Math.round(p.h / 2), k = 0; i <= p.h; i += 4, k++) {
+    const b = clamp((g - (.2 + .6 * i / p.h)) / .2);
+    if (b <= 0) continue;
+    const side = i + 4 > p.h ? p.dir : (k % 2 ? 1 : -1);
+    const x = sx(i), y = GY - i;
+    px(x + side, y, p.stem);
+    px(x + side * 2, y, p.stem);
+    for (let r = 0; r < Math.ceil(b * 4); r++)
+      for (let c = 0; c < 5; c++)
+        if (BELL[r][c] === 'X') px(x + side * 3 - 2 + c, y + 1 + r, p.bell[r === 3 ? 1 : 0]);
+  }
+}
+
+// typewriter
+const typed = $('typed'), rest = $('rest'), msg = 'congratulations, danie!';
+function type(n) {
+  typed.textContent = msg.slice(0, n);
+  rest.textContent = msg.slice(n);
+  if (n < msg.length) setTimeout(() => type(n + 1), 120 + Math.random() * 90);
+}
+
+function frame(now) {
+  const time = reduce ? 1e6 : (now - t0) / 1000;
+  ctx.clearRect(0, 0, W, H);
+
+  for (const p of plants) if (time - .4 - p.d > 0) drawPlant(p, time - .4 - p.d, time);
+
+  if (time >= endT && !typing) { typing = true; type(reduce ? msg.length : 1); }
+  requestAnimationFrame(frame);
+}
+
+addEventListener('resize', setup);
+setup();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
